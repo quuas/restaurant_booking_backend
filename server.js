@@ -6,6 +6,11 @@ const { Pool } = require('pg');
 const app = express();
 const port = process.env.PORT || 5000;
 
+const path = require('path');
+
+// Разрешаем доступ к файлам в папке /uploads
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 app.use(cors());
 app.use(express.json());
 
@@ -108,7 +113,7 @@ app.post('/login', async (req, res) => {
 
 // Добавление нового ресторана
 app.post('/restaurants/add', authenticateToken, async (req, res) => {
-    const { name, address, phone, description, cuisine_type } = req.body;
+    const { name, address, phone, description, cuisine_type, image_url } = req.body;
 
     if (!name || !address || !phone) {
         return res.status(400).json({ error: 'Название, адрес и телефон обязательны' });
@@ -116,8 +121,8 @@ app.post('/restaurants/add', authenticateToken, async (req, res) => {
 
     try {
         const result = await pool.query(
-            'INSERT INTO restaurants (name, address, phone, description, cuisine_type, owner_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-            [name, address, phone, description, cuisine_type, req.user.id]
+            'INSERT INTO restaurants (name, address, phone, description, cuisine_type, image_url, owner_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+            [name, address, phone, description, cuisine_type, image_url, req.user.id]
         );
         res.status(201).json({ message: 'Ресторан добавлен', restaurant: result.rows[0] });
     } catch (error) {
@@ -125,6 +130,7 @@ app.post('/restaurants/add', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
+
 
 // Добавление столов в ресторан (ТОЛЬКО АДМИН)
 app.post('/restaurants/:id/tables/add', authenticateToken, async (req, res) => {
@@ -147,51 +153,48 @@ app.post('/restaurants/:id/tables/add', authenticateToken, async (req, res) => {
     }
 });
 
-// Бронирование стола
+// Бронирование стола (проверяем занятость)
 app.post('/book', authenticateToken, async (req, res) => {
     const { restaurant_id, table_id, reservation_time } = req.body;
-
-    if (!restaurant_id || !table_id || !reservation_time) {
-        return res.status(400).json({ error: 'Нужно указать ресторан, стол и время брони' });
-    }
+    const userId = req.user.id;
 
     try {
-        // Проверяем, свободен ли стол
-        const tableCheck = await pool.query('SELECT * FROM tables WHERE id = $1 AND status = $2', [table_id, 'available']);
-        if (tableCheck.rows.length === 0) {
-            return res.status(400).json({ error: 'Этот стол уже забронирован' });
-        }
+        // Преобразуем дату в UTC и форматируем для PostgreSQL
+        const formattedReservationTime = new Date(reservation_time).toISOString();
 
-        // Добавляем бронь
-        const result = await pool.query(
-            'INSERT INTO bookings (user_id, restaurant_id, table_id, reservation_time, status) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-            [req.user.id, restaurant_id, table_id, reservation_time, 'confirmed']
+        const existingBooking = await pool.query(
+            `SELECT * FROM bookings WHERE table_id = $1 AND reservation_time = $2`,
+            [table_id, formattedReservationTime]
         );
 
-        // Обновляем статус стола
-        await pool.query('UPDATE tables SET status = $1 WHERE id = $2', ['reserved', table_id]);
+        if (existingBooking.rows.length > 0) {
+            return res.status(400).json({ error: "Этот столик уже забронирован." });
+        }
 
-        res.status(201).json({ message: 'Стол успешно забронирован', booking: result.rows[0] });
+        const newBooking = await pool.query(
+            `INSERT INTO bookings (user_id, restaurant_id, table_id, reservation_time) VALUES ($1, $2, $3, $4) RETURNING *`,
+            [userId, restaurant_id, table_id, formattedReservationTime]
+        );
+
+        res.json({ message: "Бронирование успешно!", booking: newBooking.rows[0] });
     } catch (error) {
-        console.error('Ошибка бронирования:', error);
-        res.status(500).json({ error: 'Ошибка сервера' });
+        console.error("Ошибка бронирования:", error);
+        res.status(500).json({ error: "Ошибка сервера." });
     }
 });
 
-// Отмена бронирования (ТОЛЬКО ВЛАДЕЛЕЦ БРОНИ)
-app.post('/cancel-booking', authenticateToken, async (req, res) => {
-    const { booking_id } = req.body;
 
-    if (!booking_id) {
-        return res.status(400).json({ error: 'Нужно указать ID бронирования' });
-    }
+// Отмена бронирования (ТОЛЬКО ВЛАДЕЛЕЦ БРОНИ)
+app.delete('/bookings/:id', authenticateToken, async (req, res) => {
+    const bookingId = req.params.id;
 
     try {
         // Проверяем, принадлежит ли бронирование пользователю
         const bookingCheck = await pool.query(
             'SELECT * FROM bookings WHERE id = $1 AND user_id = $2',
-            [booking_id, req.user.id]
+            [bookingId, req.user.id]
         );
+
         if (bookingCheck.rows.length === 0) {
             return res.status(403).json({ error: 'Нет доступа или бронирование не найдено' });
         }
@@ -199,7 +202,7 @@ app.post('/cancel-booking', authenticateToken, async (req, res) => {
         const tableId = bookingCheck.rows[0].table_id;
 
         // Удаляем бронирование
-        await pool.query('DELETE FROM bookings WHERE id = $1', [booking_id]);
+        await pool.query('DELETE FROM bookings WHERE id = $1', [bookingId]);
 
         // Освобождаем стол
         await pool.query('UPDATE tables SET status = $1 WHERE id = $2', ['available', tableId]);
@@ -211,6 +214,8 @@ app.post('/cancel-booking', authenticateToken, async (req, res) => {
     }
 });
 
+
+
 app.get('/profile', authenticateToken, async (req, res) => {
     try {
         const userResult = await pool.query('SELECT id, name, email, phone, role FROM users WHERE id = $1', [req.user.id]);
@@ -219,12 +224,27 @@ app.get('/profile', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Пользователь не найден' });
         }
 
-        res.json(userResult.rows[0]);
+        // Получаем бронирования пользователя
+        const bookingsResult = await pool.query(
+            `SELECT b.id, r.name AS restaurant_name, t.table_number, b.reservation_time, b.status 
+             FROM bookings b
+             JOIN restaurants r ON b.restaurant_id = r.id
+             JOIN tables t ON b.table_id = t.id
+             WHERE b.user_id = $1
+             ORDER BY b.reservation_time DESC`,
+            [req.user.id]
+        );
+
+        res.json({
+            user: userResult.rows[0],
+            bookings: bookingsResult.rows,
+        });
     } catch (error) {
         console.error('Ошибка получения профиля:', error);
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
+
 
 // Получение списка ресторанов
 app.get('/restaurants', async (req, res) => {
@@ -257,7 +277,8 @@ app.get('/restaurants/:id/tables', async (req, res) => {
 app.get('/my-bookings', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT b.id, r.name AS restaurant_name, t.table_number, b.reservation_time, b.status 
+            `SELECT b.id, r.name AS restaurant_name, t.table_number, 
+                    (b.reservation_time AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') AS reservation_time
              FROM bookings b
              JOIN restaurants r ON b.restaurant_id = r.id
              JOIN tables t ON b.table_id = t.id
@@ -265,12 +286,14 @@ app.get('/my-bookings', authenticateToken, async (req, res) => {
              ORDER BY b.reservation_time DESC`,
             [req.user.id]
         );
+
         res.json(result.rows);
     } catch (error) {
         console.error('Ошибка получения бронирований:', error);
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
+
 
 // Получение бронирований ресторана (ТОЛЬКО ДЛЯ АДМИНА)
 app.get('/restaurant/:id/bookings', authenticateToken, async (req, res) => {
@@ -303,6 +326,6 @@ app.get('/restaurant/:id/bookings', authenticateToken, async (req, res) => {
     }
 });
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
     console.log(`🚀 Сервер запущен на порту ${port}`);
 });

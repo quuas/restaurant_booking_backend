@@ -14,7 +14,7 @@ export default function BookingScreen({ route, navigation }: BookingScreenProps)
 
     const handleBooking = async () => {
         try {
-            await axios.post('http://localhost:5000/book', {
+            await axios.post('http://192.168.3.58:5000/book', {
                 restaurant_id: restaurantId,
                 table_id: 1,
                 reservation_time: new Date().toISOString(),

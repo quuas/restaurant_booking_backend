@@ -8,6 +8,7 @@ import RegisterScreen from './screens/RegisterScreen';
 import RestaurantsScreen from './screens/RestaurantsScreen';
 import BookingScreen from './screens/BookingScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import RestaurantDetailsScreen from './screens/RestaurantDetailsScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -32,6 +33,7 @@ export default function App() {
                     name="Booking" 
                     component={BookingScreen as React.ComponentType<any>}
                 />
+                <Stack.Screen name="RestaurantDetails" component={RestaurantDetailsScreen} />
             </Stack.Navigator>
         </NavigationContainer>
     );
