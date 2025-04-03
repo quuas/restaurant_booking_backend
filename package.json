@@ -6,7 +6,7 @@
     "server": "cd restaurant_booking_backend && node server.js",
     "mobile": "cd restaurant_booking_app && expo start",
     "start": "concurrently \"npm run server\" \"npm run mobile\""
-},
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -17,6 +17,7 @@
     "@react-navigation/stack": "^7.1.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
+    "date-fns-tz": "^3.2.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity, Alert, Modal, FlatList } from 'react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { format, toZonedTime } from 'date-fns-tz';
 
 export default function RestaurantDetailsScreen({ route }: any) {
     const { restaurant } = route.params; 
@@ -17,11 +18,19 @@ export default function RestaurantDetailsScreen({ route }: any) {
             const response = await axios.get<{ id: number; table_number: number; seats: number; status: string }[]>(
                 `http://192.168.3.58:5000/restaurants/${restaurantId}/tables`
             );
-            setTables(response.data);
+    
+            console.log("Полученные столики с сервера:", response.data);
+    
+            if (response.data && Array.isArray(response.data)) {
+                setTables(response.data);
+            } else {
+                console.error("Ошибка: Неверный формат данных о столах", response.data);
+            }
         } catch (error) {
             console.error("Ошибка загрузки столиков:", error);
         }
     };
+    
     
 
     useEffect(() => {
@@ -30,39 +39,45 @@ export default function RestaurantDetailsScreen({ route }: any) {
 
     const handleBooking = async () => {
         try {
-            const token = await AsyncStorage.getItem('token'); 
-
+            const token = await AsyncStorage.getItem('token');
+    
             if (!token) {
                 Alert.alert('Ошибка', 'Не удалось авторизоваться');
                 return;
             }
-
+    
             if (!selectedTable) {
                 Alert.alert('Ошибка', 'Выберите столик перед бронированием');
                 return;
             }
-
-            await axios.post(
+    
+            // Получаем текущее время в UTC и переводим в московское
+            const now = new Date();
+            const formattedTime = new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString();
+    
+            const response = await axios.post(
                 'http://192.168.3.58:5000/book',
                 {
                     restaurant_id: restaurantId,
                     table_id: selectedTable,
-                    reservation_time: new Date(new Date().getTime() + 3 * 60 * 60 * 1000).toISOString(),
+                    reservation_time: formattedTime,
                 },
                 {
                     headers: { Authorization: `Bearer ${token}` },
                 }
             );
-
+    
             Alert.alert('Успех', 'Столик забронирован');
-            setModalVisible(false); // Закрываем модальное окно
-            fetchTables(); // Обновляем список столиков
+    
+            // Обновляем список столиков
+            fetchTables();
+    
         } catch (error: any) {
-            console.error('Ошибка бронирования:', error.response?.data);
+            console.error('Ошибка бронирования:', error.response?.data || error.message);
             Alert.alert('Ошибка', error.response?.data?.error || 'Не удалось забронировать');
         }
-    };
-
+    };    
+    
     return (
         <View style={styles.container}>
             <Image source={{ uri: restaurant.image_url }} style={styles.image} />
@@ -80,22 +95,26 @@ export default function RestaurantDetailsScreen({ route }: any) {
                         <Text style={styles.modalHeader}>Выберите столик</Text>
                         
                         <FlatList
-                            data={tables}
-                            keyExtractor={(item) => item.id.toString()}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity 
-                                    style={[styles.tableItem, selectedTable === item.id && styles.selectedTable]}
-                                    onPress={() => setSelectedTable(item.id)}
-                                    disabled={item.status === 'booked'} // Если забронирован, нельзя выбрать
-                                >
+                             data={tables}
+                             keyExtractor={(item) => item.id.toString()}
+                             renderItem={({ item }) => (
+                                 <TouchableOpacity 
+                                     style={[
+                                         styles.tableItem, 
+                                         selectedTable === item.id && styles.selectedTable,
+                                         item.status === 'booked' && styles.disabledTable // Серый фон для занятых
+                                     ]}
+                                     onPress={() => setSelectedTable(item.id)}
+                                     disabled={item.status === 'booked'} // Если столик занят, запрет на нажатие
+                                  >
                                     <Text style={styles.tableText}>
                                         Столик №{item.table_number} ({item.seats} мест)
-                                    </Text>
-                                    <Text style={item.status === 'available' ? styles.available : styles.booked}>
+                                     </Text>
+                                     <Text style={item.status === 'available' ? styles.available : styles.booked}>
                                         {item.status === 'available' ? 'Свободен' : 'Занят'}
                                     </Text>
-                                </TouchableOpacity>
-                            )}
+                                 </TouchableOpacity>
+                              )}
                         />
 
                         <View style={styles.modalButtons}>
@@ -131,5 +150,6 @@ const styles = StyleSheet.create({
     modalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
     cancelButton: { backgroundColor: '#ccc', padding: 10, borderRadius: 5, flex: 1, marginRight: 5 },
     confirmButton: { backgroundColor: '#28A745', padding: 10, borderRadius: 5, flex: 1, marginLeft: 5 },
+    disabledTable: { backgroundColor: '#ccc', },
 });
 

@@ -154,34 +154,55 @@ app.post('/restaurants/:id/tables/add', authenticateToken, async (req, res) => {
 });
 
 // Бронирование стола (проверяем занятость)
+// Бронирование стола (проверяем занятость)
 app.post('/book', authenticateToken, async (req, res) => {
     const { restaurant_id, table_id, reservation_time } = req.body;
     const userId = req.user.id;
 
+    const client = await pool.connect(); // подключаемся вручную для транзакции
+
     try {
-        // Преобразуем дату в UTC и форматируем для PostgreSQL
         const formattedReservationTime = new Date(reservation_time).toISOString();
 
-        const existingBooking = await pool.query(
+        await client.query('BEGIN'); // старт транзакции
+
+        // Проверка на уже существующее бронирование
+        const existingBooking = await client.query(
             `SELECT * FROM bookings WHERE table_id = $1 AND reservation_time = $2`,
             [table_id, formattedReservationTime]
         );
 
         if (existingBooking.rows.length > 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ error: "Этот столик уже забронирован." });
         }
 
-        const newBooking = await pool.query(
-            `INSERT INTO bookings (user_id, restaurant_id, table_id, reservation_time) VALUES ($1, $2, $3, $4) RETURNING *`,
+        // Создаём бронирование
+        const newBooking = await client.query(
+            `INSERT INTO bookings (user_id, restaurant_id, table_id, reservation_time)
+             VALUES ($1, $2, $3, $4) RETURNING *`,
             [userId, restaurant_id, table_id, formattedReservationTime]
         );
 
+        // Обновляем статус столика (обязательно кастим в text!)
+        await client.query(
+            'UPDATE tables SET status = $1::text WHERE id = $2',
+            ['booked', table_id]
+        );
+
+        await client.query('COMMIT'); // успех, сохраняем транзакцию
+
         res.json({ message: "Бронирование успешно!", booking: newBooking.rows[0] });
+
     } catch (error) {
+        await client.query('ROLLBACK'); // ошибка — откатываем всё
         console.error("Ошибка бронирования:", error);
         res.status(500).json({ error: "Ошибка сервера." });
+    } finally {
+        client.release(); // освобождаем соединение
     }
 });
+
 
 
 // Отмена бронирования (ТОЛЬКО ВЛАДЕЛЕЦ БРОНИ)
@@ -213,7 +234,6 @@ app.delete('/bookings/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
-
 
 
 app.get('/profile', authenticateToken, async (req, res) => {
@@ -263,7 +283,15 @@ app.get('/restaurants/:id/tables', async (req, res) => {
 
     try {
         const result = await pool.query(
-            'SELECT * FROM tables WHERE restaurant_id = $1 ORDER BY table_number ASC',
+            `SELECT t.id, t.table_number, t.seats,
+                    CASE 
+                        WHEN EXISTS (SELECT 1 FROM bookings b WHERE b.table_id = t.id) 
+                        THEN 'booked' 
+                        ELSE 'available' 
+                    END AS status
+            FROM tables t
+            WHERE t.restaurant_id = $1
+            ORDER BY t.table_number ASC`,
             [restaurantId]
         );
         res.json(result.rows);
@@ -272,6 +300,7 @@ app.get('/restaurants/:id/tables', async (req, res) => {
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
+
 
 // Получение бронирований текущего пользователя
 app.get('/my-bookings', authenticateToken, async (req, res) => {
