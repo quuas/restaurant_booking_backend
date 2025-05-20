@@ -49,7 +49,7 @@ npm run start
 ```
 
 ⚙️ Технологии
-React Native (Expo SDK 53)
+React Native (Expo SDK 52)
 Node.js + Express
 PostgreSQL
 React Navigation
